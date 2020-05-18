@@ -30,6 +30,7 @@
 #ifndef INCLUDE_GUARD_DFBD8064_93B7_4262_9B4C_AB9046ADF2E2
 #define INCLUDE_GUARD_DFBD8064_93B7_4262_9B4C_AB9046ADF2E2
 
+
 #include "string_view.hpp"
 
 #include <cassert>
@@ -70,6 +71,7 @@ typedef state<0> always_keep_going;
 typedef state<1> always_stop;
 typedef state<2> always_abort;
 
+inline
 void require_abort(always_abort) {
 }
 
@@ -127,22 +129,54 @@ public:
 
 namespace detail {
 
+struct simd {};
+struct no_simd {};
+
+template <typename It, typename EndIt>
+struct use_simd {
+	typedef no_simd type;
+};
+
+template <>
+struct use_simd<char*, char*> {
+	typedef simd type;
+};
+
+template <>
+struct use_simd<char const*, char*> {
+	typedef simd type;
+};
+
+template <>
+struct use_simd<char*, char const*> {
+	typedef simd type;
+};
+
+template <>
+struct use_simd<char const*, char const*> {
+	typedef simd type;
+};
+
 struct cstr_end_iterator {
 
 };
 
+inline
 bool operator==(cstr_end_iterator, char const* it) {
 	return *it == '\0';
 }
 
+inline
 bool operator==(char const* it, cstr_end_iterator) {
 	return *it == '\0';
 }
 
+inline
 bool operator!=(cstr_end_iterator, char const* it) {
 	return *it != '\0';
 }
 
+inline
 bool operator!=(char const* it, cstr_end_iterator) {
 	return *it != '\0';
 }
@@ -179,6 +213,7 @@ public:
 	}
 };
 
+inline
 bool to_return_value(command c) {
 	assert(c != keep_going);
 	return c == stop;
@@ -194,26 +229,25 @@ public:
 	}
 
 	void start(char const*) const {
+		m_container->push_back('\0');
 	}
 
 	void append(char ch) {
-		m_container->push_back(ch);
+		m_container->insert(m_container->end() - 1, ch);
 	}
 
-	void append(char const* begin, char const* end) {
-		m_container->insert(m_container->end(), begin, end);
+	template <typename It>
+	void append(It begin, It end) {
+		m_container->insert(m_container->end() - 1, begin, end);
 	}
 
 	void append_same(char ch) {
-		m_container->push_back(ch);
+		m_container->insert(m_container->end() - 1, ch);
 	}
 
-	void all_same(char ch) {
-		m_container->push_back(ch);
-	}
-
-	void append_same(char const* begin, char const* end) {
-		m_container->insert(m_container->end(), begin, end);
+	template <typename It>
+	void append_same(It begin, It end) {
+		m_container->insert(m_container->end() - 1, begin, end);
 	}
 
 	void clear() {
@@ -221,7 +255,7 @@ public:
 	}
 
 	string_cview view_string() {
-		return string_cview(m_container->data(), m_container->size());
+		return string_cview(m_container->data(), m_container->size() - 1);
 	}
 };
 
@@ -244,7 +278,15 @@ public:
 		return m_start;
 	}
 
+	char const* start_pos() const {
+		return m_start;
+	}
+
 	char* current_pos() {
+		return m_current;
+	}
+
+	char const* current_pos() const {
 		return m_current;
 	}
 
@@ -257,24 +299,20 @@ public:
 		*m_current++ = ch;
 	}
 
-	void append(char* begin, char* end) {
+	template <typename It>
+	void append(It begin, It end) {
 		while(begin != end) {
 			*m_current++ = *begin++;
 		}
 	}
 
-	void append_same(char ch) {
-		*m_current++ = ch;
+	void append_same(char) {
+		m_current++;
 	}
 
-	void all_same(char) {
-		++m_current;
-	}
-
-	void append_same(char const* begin, char const* end) {
-		while(begin != end) {
-			*m_current++ = *begin++;
-		}
+	template <typename It>
+	void append_same(It begin, It end) {
+		m_current += (end - begin);
 	}
 
 	void clear() const {
@@ -284,6 +322,24 @@ public:
 		return string_view(m_start, m_current - m_start);
 	}
 };
+
+/** Returns the number of leading 0 bits in \a data. */
+__forceinline int count_leading_zeros(unsigned data) {
+#ifdef _MSC_VER
+	unsigned long index;
+	if(_BitScanForward(&index, data)) {
+		return index;
+	} else {
+		return 16;
+	}
+#else
+	if(data != 0) {
+		return __builtin_ctz(data);
+	} else {
+		return 16;
+	}
+#endif
+}
 
 }
 

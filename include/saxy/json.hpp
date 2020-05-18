@@ -1,4 +1,4 @@
-/******************************************************************//**
+/*************************************************************************//**
  * \file   json.hpp
  * \author Elliot Goodrich
  *
@@ -25,196 +25,92 @@
  * FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- *********************************************************************/
+ ****************************************************************************/
 
 #ifndef INCLUDE_GUARD_CF7BF358_ECA4_441C_9585_9E7224FE5F70
 #define INCLUDE_GUARD_CF7BF358_ECA4_441C_9585_9E7224FE5F70
+
+#include "common.hpp"
 
 #include <cassert>
 #include <string>
 
 namespace saxy {
 
-struct json_callback {
-	void name(string_view name);
-	void number(double name);
-	void string(string_view name);
-	void boolean(bool name);
-	void null();
-	void start_object();
-	void end_object();
-	void start_array();
-	void end_array();
-
-	void error(saxy::json_error::code ec, std::string::size_type i);
-};
-
-struct json_error {
-	enum code {
-		none,
-	};
-};
-
-#define SAXY_JSON_STATE(X) goto exit; X: m_state = X;
-
-template <typename Callback>
-class json_parser {
-	std::string m_field;
-	Callback& m_cb;
-
+class json {
 	enum state {
-	} m_state;
+		begin,
+	};
 
 public:
-	json_parser(Callback& cb)
-	: m_cb(cb)
-	, m_state{start_of_row} {
-	}
+	static char const* name; ///< "JSON"
 
-	template <typename ForwardIt>
-	bool parse(ForwardIt it, ForwardIt end) {
-		std::string::size_type index = 0;
+	enum error_code {
+		none = 0, ///< No error
+	};
 
-		switch(m_state) {
-			case start_of_row:      goto start_of_row;
-			case start_of_field:    goto start_of_field;
-			case in_quoted_field:   goto in_quoted_field;
-			case in_unquoted_field: goto in_unquoted_field;
-			case in_quote:          goto in_quote;
-			case in_new_line:       goto in_new_line;
-			case require_line_feed: goto require_line_feed;
-			case end_of_field:      goto end_of_field;
-			case end_of_row:        goto end_of_row;
-			case error:             goto error;
-			default: assert("Unknown state in saxy::csv_parser");
+	enum event {
+		begin_array_event,
+		end_array_event,
+		begin_object_event,
+		end_object_event,
+		name_event,
+		number_event,
+		string_event,
+		boolean_event,
+		null_event,
+		error_event      ///<
+	};
+
+	template <typename Callback, typename Return = command>
+	class event_callback {
+		Callback* m_cb;
+
+	public:
+		explicit event_callback(Callback& cb)
+		: m_cb(&cb) {
 		}
 
-		SAXY_CSV_STATE(start_of_row) {
-			if(it != end) {
-				m_cb.start_row();
-				goto start_of_field;
-			}
+		Return begin_array() {
+			return m_cb->event(begin_array_event, string_view());
 		}
 
-		SAXY_CSV_STATE(start_of_field) {
-			while(it != end) {
-				++index;
-				const char ch = *it++;
-				switch(ch) {
-					case ',':  goto end_of_field;
-					case '"':  goto in_quoted_field;
-					case '\r': goto in_new_line;
-					default:
-						m_field += ch;
-						goto in_unquoted_field;
-				}
-			};
+		Return end_array() {
+			return m_cb->event(end_array_event, string_view());
 		}
 
-		SAXY_CSV_STATE(in_unquoted_field) {
-			while(it != end) {
-				++index;
-				const char ch = *it++;
-				switch(ch) {
-					case '"':
-						m_cb.error(csv_error::misplaced_double_quotes, index - 1);
-						goto error;
-					case ',':  goto end_of_field;
-					case '\r': goto in_new_line;
-					default:
-						m_field += ch;
-				}
-			}
+		Return begin_object() {
+			return m_cb->event(begin_object_event, string_view());
 		}
 
-		SAXY_CSV_STATE(in_quoted_field) {
-			while(it != end) {
-				++index;
-				const char ch = *it++;
-				switch(ch) {
-					case '"': goto in_quote;
-					default:
-						m_field += ch;
-				}
-			}
+		Return end_object() {
+			return m_cb->event(end_object_event, string_view());
 		}
 
-		SAXY_CSV_STATE(in_quote) {
-			if(it != end) {
-				++index;
-				const char ch = *it++;
-				switch(ch) {
-					case ',':  goto end_of_field;
-					case '\r': goto require_line_feed;
-					case '"':
-						m_field += '"';
-						goto in_quoted_field;
-					default:
-						m_cb.error(csv_error::text_after_closing_quotes, index - 1);
-						goto error;
-				}
-			}
+		template <typename StringView>
+		Return name(StringView str) {
+			return m_cb->event(name_event, str);
 		}
 
-		SAXY_CSV_STATE(in_new_line) {
-			if(it != end) {
-				++index;
-				const char ch = *it++;
-				if(ch == '\n') {
-					goto end_of_row;
-				}
-
-				m_field += '\r';
-				if(ch == '\r') {
-					goto in_new_line;
-				} else {
-					m_field += ch;
-					goto in_unquoted_field;
-				}
-			}
+		template <typename StringView>
+		Return number(StringView str) {
+			return m_cb->event(number_event, str);
 		}
 
-		SAXY_CSV_STATE(require_line_feed) {
-			if(it != end) {
-				++index;
-				const char ch = *it++;
-				if(ch == '\n') {
-					goto end_of_row;
-				} else {
-					m_cb.error(csv_error::unfinished_crlf, index - 1);
-					goto error;
-				}
-			}
+		template <typename StringView>
+		Return string(StringView str) {
+			return m_cb->event(string_event, str);
 		}
 
-		SAXY_CSV_STATE(end_of_field) {
-			m_cb.field(m_field);
-			m_field = "";
-			goto start_of_field;
+		Return boolean(bool b) {
+			return m_cb->event(string_event, str);
 		}
 
-		SAXY_CSV_STATE(end_of_row) {
-			m_cb.field(m_field);
-			m_cb.end_row();
-			m_field = "";
-			goto start_of_row;
+		always_abort error(error_code code) {
+			return m_cb->error(code);
 		}
-
-		SAXY_CSV_STATE(error) {
-			return false;
-		}
-
-		exit:
-			return true;
-	}
+	};
 };
-
-#undef SAXY_CSV_STATE
-
-template <typename Callback>
-csv_parser<Callback> make_csv_parser(Callback& cb) {
-	return csv_parser<Callback>(cb);
-}
 
 }
 

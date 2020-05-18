@@ -1,6 +1,7 @@
 #include "catch/catch.hpp"
 
 #include "saxy/csv.hpp"
+#include "saxy/iterator.hpp"
 #include "saxy/second_throw_allocator.hpp"
 #include "saxy/stack_allocator.hpp"
 
@@ -117,6 +118,53 @@ void check_conversion(int line, std::string const& csv, std::string const& xml) 
 		CHECK(converter.error_count == 0);
 	}
 
+	// Check in place iterators
+#if 0
+	{
+		INFO("Testing in place iterators");
+		INFO("Line: " << line);
+		std::vector<char> copy(csv.begin(), csv.end());
+		std::string out;
+
+		saxy::in_place_iterator<saxy::csv> it(saxy::string_view(copy.data(), copy.size()));
+		saxy::in_place_iterator<saxy::csv> end;
+		bool error = false;
+
+		while (it != end) {
+			saxy::in_place_iterator<saxy::csv> copy = it;
+			CHECK(copy == it);
+			CHECK(!(copy != it));
+			switch(it->event().type()) {
+				case saxy::csv::start_row_event:
+					out += '{';
+				break;
+				case saxy::csv::field_event:
+					out += '[';
+					out += it->text.to_string();
+					out += ']';
+				break;
+				case saxy::csv::end_row_event:
+					out += '}';
+				break;
+				case saxy::csv::error_event:
+					++it;
+					CHECK(it == end);
+					error = true;
+				break;
+			}
+
+			CHECK(copy == it);
+			CHECK(!(copy != it));
+			if(!error) {
+				++it;
+			}
+		}
+		CHECK(out == xml);
+		CHECK(!error);
+	}
+#endif
+
+	// Check that partial conversion works
 	for(std::string::size_type i = 0; i < csv.size(); ++i) {
 		std::vector<char> copy(csv.begin(), csv.end());
 		csv_test_parser converter;
@@ -231,6 +279,11 @@ TEST_CASE("Check conversion", "[csv]") {
 	check_conversion(__LINE__, "\"\"\"\"\r\n",                   "{[\"]}");
 	check_conversion(__LINE__, "\"\"\"\"\"\"\r\n",               "{[\"\"]}");
 	check_conversion(__LINE__, "\"\"\"A\"\"\",B\r\n",            "{[\"A\"][B]}");
+	check_conversion(__LINE__, "\"ABCDEFGHIJKLMNOPQRSTUVWXYZ\"\r\n",     "{[ABCDEFGHIJKLMNOPQRSTUVWXYZ]}");
+	check_conversion(__LINE__, "\"ABCDEFGHIJK\"\"LMNOPQRSTUVWXYZ\"\r\n", "{[ABCDEFGHIJK\"LMNOPQRSTUVWXYZ]}");
+}
+
+TEST_CASE("iterators", "[csv]") {
 }
 
 TEST_CASE("Check equality", "[csv]") {

@@ -53,8 +53,9 @@ template< class T > struct remove_const<const T> { typedef T type; };
 template <typename CharT, bool Const = is_const<CharT>::value>
 class basic_string_view;
 
-/** basic_string_view<CharT, true> is a non-owning reference to a const string.
- */
+///////////////////////////////////////////////////////////////////////////////
+/// basic_string_view<CharT, true> is a non-owning reference to a const string.
+///
 template <typename ConstCharT>
 class basic_string_view<ConstCharT, true> {
 public:
@@ -74,18 +75,22 @@ public:
 	typedef std::size_t    size_type;
 	typedef std::ptrdiff_t difference_type;
 
-	/** Construct an empty string.
-	 */
+	/// Construct an empty string.
+	///
 	basic_string_view()
 	: m_string(0)
 	, m_length(0) {
 	}
 
+	/// Construct a string from the null-terminated string \a str.
+	///
 	basic_string_view(const_pointer str)
 	: m_string(str)
 	, m_length(std::strlen(str)) {
 	}
 
+	/// Construct a string from the string \a str having length \a length. This
+	/// string \a str may contain null characters.
 	basic_string_view(const_pointer str, size_type length)
 	: m_string(str)
 	, m_length(length) {
@@ -221,8 +226,9 @@ public:
 	}
 };
 
-/** basic_string_view<CharT, true> is a non-owning reference to a non-const string.
- */
+///////////////////////////////////////////////////////////////////////////////
+/// basic_string_view<CharT, true> is a non-owning reference to a non-const string.
+///
 template <typename CharT>
 class basic_string_view<CharT, false> : public basic_string_view<CharT const, true> {
 public:

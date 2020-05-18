@@ -41,6 +41,10 @@
 #include <memory>
 #include <vector>
 
+#include <mmintrin.h>
+#include <xmmintrin.h>
+#include <emmintrin.h>
+
 namespace saxy {
 
 class csv {
@@ -62,17 +66,87 @@ class csv {
 	};
 
 public:
+	static char const* name; ///< "CSV"
+
+	/// An enum representing the different types of CSV parsing errors
+	///
 	enum error_code {
-		none,
-		misplaced_double_quotes,
-		text_after_closing_quotes,
-		unfinished_crlf,
-		unclosed_quote,
-		no_fields_in_record,
+		none = 0,                  ///< No error
+		misplaced_double_quotes,   ///< Double quotes appearing in unquoted field
+		text_after_closing_quotes, ///< Text found after closing quotes
+		unfinished_crlf,           ///< \r found after closing quotes, but the next character is not \n
+		unclosed_quote,            ///< Quoted field is unfinished (only occurs with finish())
+		no_fields_in_record        ///< A blank line was encountered
 	};
 
-	static char const* name;
+	/// An enum representing all of the different events.
+	enum event_code {
+		start_row_event, ///<
+		field_event,     ///< 
+		end_row_event,   ///<
+		error_event      ///<
+	};
 
+	//=========================================================================
+	// value
+	//=========================================================================
+	template <typename StringView>
+	class value {
+		event_code m_type;
+		StringView m_text;
+		error_code m_error;
+
+	public:
+		/// Create a 'value' object that holds an error code of 'error'.
+		///
+		value(error_code error);
+
+		value(event_code type, StringView str);
+
+		event_code type() const;
+
+		StringView text() const;
+
+		error_code error() const;
+	};
+
+	//=========================================================================
+	// event_callback
+	//=========================================================================
+	/// A class to convert the standard CSV callback methods into ones calling
+	/// an event() method, passing an enum with the value of the event.
+	template <typename Callback, typename Return = command>
+	class event_callback {
+		Callback* m_cb;
+
+	public:
+		explicit event_callback(Callback& cb)
+		: m_cb(&cb) {
+		}
+
+		Return start_row() {
+			return m_cb->event(start_row_event, string_view());
+		}
+
+		template <typename StringView>
+		Return field(StringView str) {
+			return m_cb->event(field_event, str);
+		}
+
+		Return end_row() {
+			return m_cb->event(end_row_event, string_view());
+		}
+
+		always_abort error(error_code code) {
+			return m_cb->error(code);
+		}
+	};
+
+	//=========================================================================
+	// in_place_parser
+	//=========================================================================
+	/// A class representing an event-based CSV parser that performs a
+	/// destructive, or in-place, parse.
 	class in_place_parser {
 		detail::in_place m_appender;
 		char* m_end;
@@ -80,14 +154,43 @@ public:
 		char* m_pos;
 
 	public:
+		/// Create an in_place_parser that will never generate any events.
+		in_place_parser();
+
+		/// Create an in_place_parser that will parse the string starting at \a
+		/// start and has a length of \a length.
+		///
+		/// @pre: \a start must not be null and must point to an array of at
+		///       least \a length characters.
+		/// @warning: When \a parse is called the string will almost certainly
+		///           be modified.
 		in_place_parser(char* start, std::size_t length);
 
-		char* position();
+		/// 
+		char const* position() const;
 
+		char const* end() const {
+			return m_end;
+		}
+
+		std::ptrdiff_t remaining_bytes() const {
+			return end() - position();
+		}
+
+		/// Parse at most 'max_parse' characters as CSV and call the callback
+		/// 'cb' with the appropriate method each time a parsing event is
+		/// generated. The return value of the callback method determines
+		/// whether the parsing continues. This method returns true unless
+		/// a method returns saxy::abort.
 		template <typename Callback>
 		bool parse(Callback& cb, std::size_t max_parse = -1);
 	};
 
+	//=========================================================================
+	// parser
+	//=========================================================================
+	/// A class representing an event-based CSV parser that performs a
+	/// non-destructive, but slower than \a in_place_parser, parse.
 	template <template <typename> class Allocator = std::allocator>
 	class parser {
 		std::vector<char, Allocator<char> > m_field;
@@ -97,8 +200,6 @@ public:
 		friend class parser;
 
 	public:
-		/** Create a CSV parser that confirms to RFC 4180
-		 */
 		parser();
 
 		explicit parser(std::size_t initial_capacity);
@@ -148,7 +249,7 @@ private:
 				return false;
 			case fail_on_line_feed:
 			case in_new_line:
-				ap.append_same('\r');
+				ap.append('\r');
 			case start_of_field:
 			case in_unquoted_field:
 			case in_quote:
@@ -235,7 +336,7 @@ private:
 					SAXY_CHANGE_STATE(fail_on_line_feed);
 			}
 
-			ap.all_same(ch);
+			ap.append_same(ch);
 			++it;
 			SAXY_CHANGE_STATE(in_unquoted_field);
 		}
@@ -250,12 +351,12 @@ private:
 				++it;
 				SAXY_CHANGE_STATE_AFTER(error, require_abort(cb.error(error_code::no_fields_in_record)));
 			} else if(ch == '\r') {
-				ap.all_same('\r');
+				ap.append('\r');
 				++it;
 				SAXY_CHANGE_STATE(in_new_line);
 			} else {
 				const char temp[2] = {'\r', ch };
-				ap.append_same(temp, temp + 2);
+				ap.append(temp, temp + 2);
 				++it;
 				SAXY_CHANGE_STATE(in_unquoted_field);
 			}
@@ -277,7 +378,7 @@ private:
 				ap.start(&*it);
 				SAXY_CHANGE_STATE(in_quoted_field);
 			} else if(ch != '\r') {
-				ap.all_same(ch);
+				ap.append_same(ch);
 				++it;
 				SAXY_CHANGE_STATE(in_unquoted_field);
 			} else {
@@ -287,10 +388,12 @@ private:
 		}
 
 		in_unquoted_field: {
+			it = no_quote_simd(ap, it, end);
+
 			while(it != end) {
 				const char ch = *it;
 				if(ch > ',') {
-					ap.all_same(ch);
+					ap.append_same(ch);
 					++it;
 				} else {
 					if(ch == ',') {
@@ -303,7 +406,7 @@ private:
 						++it;
 						SAXY_CHANGE_STATE(in_new_line);
 					} else {
-						ap.all_same(ch);
+						ap.append_same(ch);
 						++it;
 					}
 				}
@@ -313,10 +416,12 @@ private:
 		}
 
 		in_quoted_field: {
+			it = in_quote_simd(ap, it, end);
+
 			while(it != end) {
 				const char ch = *it;
 				if(ch != '"') {
-					ap.append_same(ch);
+					ap.append(ch);
 					++it;
 				} else {
 					++it;
@@ -336,7 +441,7 @@ private:
 			const char ch = *it;
 			switch(ch) {
 				case '"':
-					ap.append_same(ch);
+					ap.append(ch);
 					++it;
 					SAXY_CHANGE_STATE(in_quoted_field);
 				case ',':
@@ -361,12 +466,12 @@ private:
 				++it;
 				SAXY_CHANGE_STATE(end_of_last_field);
 			} else if(ch == '\r') {
-				ap.all_same('\r');
+				ap.append('\r');
 				++it;
 				SAXY_RESTART_STATE(in_new_line);
 			} else {
 				const char temp[2] = {'\r', ch };
-				ap.append_same(temp, temp + 2);
+				ap.append(temp, temp + 2);
 				++it;
 				SAXY_CHANGE_STATE(in_unquoted_field);
 			}
@@ -411,8 +516,65 @@ private:
 		}
 	}
 
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator no_quote_simd(Appender& ap, Iterator it, EndIt end) {
+		return no_quote_simd(typename detail::use_simd<Iterator, EndIt>::type(), ap, it, end);
+	}
+
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator no_quote_simd(detail::no_simd, Appender&, Iterator it, EndIt) {
+		return it;
+	}
+
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator no_quote_simd(detail::simd, Appender& ap, Iterator it, EndIt end) {
+		while(end - it >= 16) {
+			__m128i const comma = _mm_set1_epi8(',' + 1);
+			__m128i const csv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&*it));
+			int const special_chars = _mm_movemask_epi8(_mm_cmplt_epi8(csv, comma));
+			int const first_special_char = detail::count_leading_zeros(special_chars);
+			ap.append_same(it, it + first_special_char);
+			it += first_special_char;
+			if(first_special_char != 16) {
+				break;
+			}
+		}
+
+		return it;
+	}
+
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator in_quote_simd(Appender& ap, Iterator it, EndIt end) {
+		return in_quote_simd(typename detail::use_simd<Iterator, EndIt>::type(), ap, it, end);
+	}
+
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator in_quote_simd(detail::no_simd, Appender&, Iterator it, EndIt) {
+		return it;
+	}
+
+	template <typename Appender, typename Iterator, typename EndIt>
+	__forceinline static Iterator in_quote_simd(detail::simd, Appender& ap, Iterator it, EndIt end) {
+		while(end - it >= 16) {
+			__m128i const comma = _mm_set1_epi8(',' - 1);
+			__m128i const csv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&*it));
+			unsigned const special_chars = _mm_movemask_epi8(_mm_cmplt_epi8(csv, comma));
+			int const first_special_char = detail::count_leading_zeros(special_chars);
+			ap.append(it, it + first_special_char); // TODO, special case when we haven't have quotes
+			it += first_special_char;
+			if(first_special_char != 16) {
+				break;
+			}
+		}
+
+		return it;
+	}
+
 public:
 
+	//=========================================================================
+	// generator
+	//=========================================================================
 	class generator {
 		std::size_t m_columns;
 		std::size_t m_current_column;
@@ -479,6 +641,50 @@ public:
 
 char const* csv::name = "CSV";
 
+//-----------------------------------------------------------------------------
+// value
+//-----------------------------------------------------------------------------
+template <typename StringView>
+csv::value<StringView>::value(csv::error_code error)
+: m_type(csv::error_event)
+, m_text()
+, m_error(error) {
+}
+
+template <typename StringView>
+csv::value<StringView>::value(csv::event_code type, StringView str)
+: m_type(type)
+, m_text(str)
+, m_error(csv::none) {
+}
+
+template <typename StringView>
+csv::event_code csv::value<StringView>::type() const {
+	return m_type;
+}
+
+template <typename StringView>
+StringView csv::value<StringView>::text() const {
+	assert(m_type != csv::error_event);
+	return m_text;
+}
+
+template <typename StringView>
+csv::error_code csv::value<StringView>::error() const {
+	assert(m_type == csv::error_event);
+	return m_error;
+}
+
+//-----------------------------------------------------------------------------
+// in_place_parser
+//-----------------------------------------------------------------------------
+csv::in_place_parser::in_place_parser()
+: m_appender(0)
+, m_end(0)
+, m_state(begin)
+, m_pos(0) {
+}
+
 csv::in_place_parser::in_place_parser(char* start, std::size_t length)
 : m_appender(start)
 , m_end(start + length)
@@ -486,8 +692,8 @@ csv::in_place_parser::in_place_parser(char* start, std::size_t length)
 , m_pos(start) {
 }
 
-char* csv::in_place_parser::position() {
-	return m_appender.current_pos();
+char const* csv::in_place_parser::position() const {
+	return m_pos;
 }
 
 template <typename Callback>
@@ -498,6 +704,9 @@ bool csv::in_place_parser::parse(Callback& cb, std::size_t max_parse) {
 	return result;
 }
 
+//-----------------------------------------------------------------------------
+// parser
+//-----------------------------------------------------------------------------
 template <template <typename> class Allocator>
 csv::parser<Allocator>::parser()
 : m_state(begin) {

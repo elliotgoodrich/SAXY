@@ -50,10 +50,11 @@ struct do_nothing {
 };
 
 int main() {
-	std::size_t const rows = 200000;
-	std::size_t const columns = 50;
+	std::size_t const rows = 10000;
+	std::size_t const columns = 10;
 
-	std::string field = "abc";
+	std::string field = "0123456789012345678901234567890123456789012345678,\"901234567890123456\",78901234567890123456789012345678901234567890123456789";
+	//std::string field = "0";
 	std::string csv;
 
 	{
@@ -93,6 +94,7 @@ int main() {
 		std::cout << "std::strlen ticks/char: " << static_cast<double>(tick_count) / length << "\n\n";
 	}
 
+#if 0
 	{
 		char buf[100];
 		saxy::buffer buffer(buf, 100);
@@ -115,6 +117,7 @@ int main() {
 		std::cout << "ticks/char: " << static_cast<double>(tick_count) / length << "\n";
 		std::cout << "strlen ratio: " << std::fixed << std::setprecision(2) << static_cast<double>(us) / strlen_time << "x\n\n";
 	}
+#endif
 
 	double us = 0.0;
 	double ticks = 0;
